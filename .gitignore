@@ -1,0 +1,18 @@
+# Binaries
+go/go-service
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# OS
+.DS_Store
