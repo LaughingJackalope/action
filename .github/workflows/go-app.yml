@@ -24,11 +24,18 @@ jobs:
       run: make -C go build
   build-docker:
     runs-on: ubuntu-latest
+    needs: build-binary
     steps:
-      -
-        name: Log in to GHCR
+      - uses: actions/checkout@v6
+      - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./go
+          push: true
+          tags: ghcr.io/${{ github.repository }}/go-service:latest
