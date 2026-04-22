@@ -4,9 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       kafka_version:
-        description: 'Apache Kafka version to build (e.g., 3.7.0)'
+        description: 'Apache Kafka 4.x version to build'
         required: true
-        type: string
+        type: choice
+        options:
+          - '4.0.0'
+          - '4.1.0'
+          - '4.2.0'
+        default: '4.0.0'
 
 # Minimal permissions for security and compliance
 # - contents:write: Required to create GitHub Releases
