@@ -51,7 +51,6 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'maven'
 
       # ============================================================================
       # STEP 3: Capture build environment details for audit trail
