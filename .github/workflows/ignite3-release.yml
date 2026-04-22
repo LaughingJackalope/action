@@ -1,0 +1,246 @@
+name: Build and Release Apache Ignite 3 from Source
+
+on:
+  workflow_dispatch:
+    inputs:
+      ignite_version:
+        description: 'Apache Ignite 3 version to build'
+        required: true
+        type: choice
+        options:
+          - '3.0.0-alpha1'
+          - '3.0.0-alpha2'
+          - '3.0.0-alpha3'
+          - '3.0.0-alpha4'
+          - '3.0.0-alpha5'
+          - '3.0.0-beta1'
+        default: '3.1.0'
+
+# Minimal permissions for security and compliance
+# - contents:write: Required to create GitHub Releases
+# - packages:write: Required if publishing to GitHub Packages
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-release:
+    name: Build and Release Ignite 3 ${{ github.event.inputs.ignite_version }}
+    runs-on: ubuntu-latest
+    
+    steps:
+      # ============================================================================
+      # STEP 1: Check out Apache Ignite 3 source at the specified release tag
+      # Purpose: Establish exact source provenance for regulatory audit trail
+      # ============================================================================
+      - name: Checkout Apache Ignite 3 source
+        uses: actions/checkout@v6
+        with:
+          repository: apache/ignite-3
+          ref: ${{ github.event.inputs.ignite_version }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      # ============================================================================
+      # STEP 2: Set up JDK 17 (Eclipse Temurin distribution)
+      # Purpose: Use a vendor-supported, open-source JDK for reproducible builds
+      # ============================================================================
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # ============================================================================
+      # STEP 3: Capture build environment details for audit trail
+      # Purpose: Document exact build environment for compliance verification
+      # ============================================================================
+      - name: Capture build environment
+        id: env_capture
+        run: |
+          echo "BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_ENV
+          echo "JDK_VERSION=$(java -version 2>&1 | head -n 1)" >> $GITHUB_ENV
+          echo "JDK_VENDOR=$(java -version 2>&1 | grep -i 'vendor' | head -n 1 || echo 'Eclipse Temurin (from setup-java)')" >> $GITHUB_ENV
+          echo "RUNNER_OS=${{ runner.os }}" >> $GITHUB_ENV
+          echo "RUNNER_ARCH=${{ runner.arch }}" >> $GITHUB_ENV
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> $GITHUB_ENV
+          echo "SOURCE_COMMIT_SHORT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "MAVEN_VERSION=$(mvn -version | head -n 1)" >> $GITHUB_ENV
+
+      # ============================================================================
+      # STEP 4: Build Ignite 3 from source
+      # Purpose: Compile official Apache Ignite 3 release from verified source
+      # ============================================================================
+      - name: Build Ignite 3
+        run: |
+          echo "Starting Ignite 3 build for version ${{ github.event.inputs.ignite_version }}"
+          echo "Source commit: ${{ env.SOURCE_COMMIT }}"
+          mvn clean package -DskipTests -Pplatform-release -pl :ignite-core,:ignite-api,:ignite-client,:ignite-server,:ignite-runner,:ignite-packaging -am 2>&1 | tee build-output.log
+        timeout-minutes: 60
+
+      # ============================================================================
+      # STEP 5: Generate Software Bill of Materials (SBOM)
+      # Purpose: Create compliance artifact for software supply chain transparency
+      # Tool: Syft (open-source SBOM generator from Anchore)
+      # ============================================================================
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Generate SBOM
+        run: |
+          syft . --output spdx-json=ignite3-sbom-${{ github.event.inputs.ignite_version }}.json
+          syft . --output cyclonedx-json=ignite3-sbom-${{ github.event.inputs.ignite_version }}-cyclonedx.json
+          echo "SBOM files generated:"
+          ls -la ignite3-sbom-*
+
+      # ============================================================================
+      # STEP 6: Create detailed build report for audit trail
+      # Purpose: Provide human-readable documentation of build provenance
+      # ============================================================================
+      - name: Generate build report
+        run: |
+          cat > BUILD-REPORT-${{ github.event.inputs.ignite_version }}.txt << 'EOF'
+          ===========================================================================
+          APACHE IGNITE 3 SOURCE BUILD - COMPLIANCE REPORT
+          ===========================================================================
+          
+          BUILD IDENTIFICATION
+          --------------------
+          Source Repository:      apache/ignite-3
+          Release Tag/Version:  ${{ github.event.inputs.ignite_version }}
+          Source Commit Hash:   ${{ env.SOURCE_COMMIT }}
+          Build Timestamp:      ${{ env.BUILD_DATE }}
+          GitHub Run ID:        ${{ github.run_id }}
+          GitHub Run Number:    ${{ github.run_number }}
+          
+          BUILD ENVIRONMENT
+          -----------------
+          JDK Version:          ${{ env.JDK_VERSION }}
+          JDK Vendor:           ${{ env.JDK_VENDOR }}
+          Maven Version:        ${{ env.MAVEN_VERSION }}
+          Runner OS:            ${{ env.RUNNER_OS }} ${{ env.RUNNER_ARCH }}
+          
+          SOURCE PROVENANCE
+          -----------------
+          This build was compiled from the official Apache Ignite 3 source code
+          obtained directly from the apache/ignite-3 GitHub repository.
+          
+          The exact source commit used: ${{ env.SOURCE_COMMIT }} (short: ${{ env.SOURCE_COMMIT_SHORT }})
+          This commit corresponds to the Git tag: ${{ github.event.inputs.ignite_version }}
+          
+          VERIFICATION INSTRUCTIONS
+          -------------------------
+          To verify the source provenance of this build:
+          1. Clone the Apache Ignite 3 repository: git clone https://github.com/apache/ignite-3.git
+          2. Checkout the exact commit: git checkout ${{ env.SOURCE_COMMIT }}
+          3. Verify the tag: git tag -v ${{ github.event.inputs.ignite_version }} (if signed)
+          4. Compare build outputs with the artifacts in this release
+          
+          COMPLIANCE STATEMENT
+          --------------------
+          This build was produced using automated CI/CD with complete audit logging.
+          All build inputs, environment details, and outputs are documented herein.
+          The SBOM (Software Bill of Materials) is attached for dependency analysis.
+          
+          Generated by GitHub Actions workflow: ${{ github.workflow }}
+          Workflow SHA: ${{ github.sha }}
+          
+          ===========================================================================
+          END OF BUILD REPORT
+          ===========================================================================
+          EOF
+          
+          echo "Build report generated:"
+          cat BUILD-REPORT-${{ github.event.inputs.ignite_version }}.txt
+
+      # ============================================================================
+      # STEP 7: Upload build artifacts for release
+      # Purpose: Preserve build outputs and compliance documentation
+      # ============================================================================
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ignite3-build-${{ github.event.inputs.ignite_version }}
+          path: |
+            BUILD-REPORT-${{ github.event.inputs.ignite_version }}.txt
+            ignite3-sbom-${{ github.event.inputs.ignite_version }}.json
+            ignite3-sbom-${{ github.event.inputs.ignite_version }}-cyclonedx.json
+            build-output.log
+            modules/*/target/*.jar
+            packaging/target/*.zip
+            packaging/target/*.tar.gz
+            modules/api/target/*.jar
+            modules/core/target/*.jar
+            modules/client/target/*.jar
+            modules/server/target/*.jar
+            modules/runner/target/*.jar
+          if-no-files-found: warn
+          retention-days: 90
+
+      # ============================================================================
+      # STEP 8: Create GitHub Release with all artifacts
+      # Purpose: Establish immutable source of truth for built artifacts
+      # ============================================================================
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ignite3-${{ github.event.inputs.ignite_version }}
+          name: Apache Ignite 3 ${{ github.event.inputs.ignite_version }} (Source Build)
+          body: |
+            ## Apache Ignite 3 ${{ github.event.inputs.ignite_version }} - Source Build
+            
+            This release contains Ignite 3 ${{ github.event.inputs.ignite_version }} built from the official Apache source.
+            
+            ### Source Provenance
+            - **Source Repository:** https://github.com/apache/ignite-3
+            - **Source Tag:** `${{ github.event.inputs.ignite_version }}`
+            - **Source Commit:** `${{ env.SOURCE_COMMIT }}`
+            
+            ### Build Details
+            - **Build Date:** ${{ env.BUILD_DATE }}
+            - **JDK:** ${{ env.JDK_VERSION }}
+            - **JDK Vendor:** ${{ env.JDK_VENDOR }}
+            - **Maven:** ${{ env.MAVEN_VERSION }}
+            - **Runner OS:** ${{ env.RUNNER_OS }} ${{ env.RUNNER_ARCH }}
+            
+            ### Compliance & Audit
+            - Build report and SBOM are included for regulatory inspection
+            - Full audit trail available in GitHub Actions logs
+            - Source can be verified against Apache Ignite 3 official repository
+            
+            ### Files Included
+            - `BUILD-REPORT-*.txt` - Detailed build and provenance information
+            - `ignite3-sbom-*.json` - Software Bill of Materials (SPDX & CycloneDX formats)
+            - Compiled Ignite 3 binaries and distributions
+            
+            ---
+            *This release was generated automatically via GitHub Actions for compliance and traceability.*
+          files: |
+            BUILD-REPORT-${{ github.event.inputs.ignite_version }}.txt
+            ignite3-sbom-${{ github.event.inputs.ignite_version }}.json
+            ignite3-sbom-${{ github.event.inputs.ignite_version }}-cyclonedx.json
+            build-output.log
+            modules/*/target/*.jar
+            packaging/target/*.zip
+            packaging/target/*.tar.gz
+            modules/api/target/*.jar
+            modules/core/target/*.jar
+            modules/client/target/*.jar
+            modules/server/target/*.jar
+            modules/runner/target/*.jar
+          fail_on_unmatched_files: false
+
+      # ============================================================================
+      # STEP 9: Output summary for workflow visibility
+      # Purpose: Provide immediate feedback in GitHub Actions UI
+      # ============================================================================
+      - name: Output build summary
+        run: |
+          echo "::group::Build Summary"
+          echo "✅ Ignite 3 ${{ github.event.inputs.ignite_version }} build complete"
+          echo "📦 Source Commit: ${{ env.SOURCE_COMMIT }}"
+          echo "🏷️  Release Tag: ignite3-${{ github.event.inputs.ignite_version }}"
+          echo "📄 Build Report: BUILD-REPORT-${{ github.event.inputs.ignite_version }}.txt"
+          echo "🔍 SBOM Files: ignite3-sbom-${{ github.event.inputs.ignite_version }}.json"
+          echo "::endgroup::"
